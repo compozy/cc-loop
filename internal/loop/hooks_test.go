@@ -195,7 +195,11 @@ func TestStopGoalModeCompletesWhenConfirmed(t *testing.T) {
 	t.Setenv("FAKE_CLAUDE_REVIEW", "The task is complete. Evidence: all work is verified.")
 	t.Setenv("FAKE_INTERPRET_ARGS", interpreterArgsPath)
 	t.Setenv("FAKE_INTERPRET_STDIN", interpreterStdinPath)
-	t.Setenv("FAKE_INTERPRET_VERDICT", `{"completed":true,"confidence":0.98,"reason":"all work is verified","missing_work":[],"next_round_guidance":""}`)
+	t.Setenv("FAKE_INTERPRET_VERDICT", mustMarshalJSONString(t, map[string]any{
+		"type":    "result",
+		"subtype": "success",
+		"result":  `{"completed":true,"confidence":0.98,"reason":"all work is verified","missing_work":[],"next_round_guidance":""}`,
+	}))
 	writeRuntimeConfig(t, paths, `[goal]
 `+fakeGoalConfirmCommandConfig(fakeClaude)+`
 timeout_seconds = 5

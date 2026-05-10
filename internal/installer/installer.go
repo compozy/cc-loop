@@ -46,10 +46,19 @@ func Install(paths loop.Paths, opts Options) ([]string, error) {
 		messages = append(messages, fmt.Sprintf("Preserved existing runtime config at %s", paths.RuntimeConfigPath()))
 	}
 
-	if err := ensureManagedHookConfig(paths); err != nil {
+	hookSync, err := ensureManagedHookConfig(paths)
+	if err != nil {
 		return nil, err
 	}
-	messages = append(messages, fmt.Sprintf("Updated managed hook config at %s", paths.HooksPath()))
+	if hookSync.PluginHooksEnabled {
+		if hookSync.RemovedManagedHooks {
+			messages = append(messages, fmt.Sprintf("Skipped managed hook config because cc-loop plugin hooks are enabled; removed duplicate managed hook registrations from %s", paths.HooksPath()))
+		} else {
+			messages = append(messages, fmt.Sprintf("Skipped managed hook config because cc-loop plugin hooks are enabled in %s", paths.HooksPath()))
+		}
+	} else {
+		messages = append(messages, fmt.Sprintf("Updated managed hook config at %s", paths.HooksPath()))
+	}
 
 	messages = append(messages,
 		fmt.Sprintf("Ensured loop state directory exists at %s", paths.LoopsDir()),

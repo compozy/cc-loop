@@ -512,16 +512,155 @@ func buildGoalInterpretPrompt(record LoopRecord, now time.Time, confirmationProm
 }
 
 func decodeGoalVerdict(content []byte) (GoalCheckVerdict, error) {
-	trimmed := bytes.TrimSpace(content)
-	trimmed = bytes.TrimPrefix(trimmed, []byte("```json"))
-	trimmed = bytes.TrimPrefix(trimmed, []byte("```"))
-	trimmed = bytes.TrimSuffix(trimmed, []byte("```"))
-	trimmed = bytes.TrimSpace(trimmed)
+	trimmed := trimJSONFence(content)
 	if len(trimmed) == 0 {
 		return GoalCheckVerdict{}, fmt.Errorf("empty output")
 	}
+	verdict, found, err := decodeGoalVerdictValue(trimmed, 0)
+	if err != nil {
+		return GoalCheckVerdict{}, err
+	}
+	if !found {
+		return GoalCheckVerdict{}, fmt.Errorf("unsupported Claude JSON output shape: no goal verdict found")
+	}
+	return verdict, nil
+}
+
+func decodeGoalVerdictValue(content []byte, depth int) (GoalCheckVerdict, bool, error) {
+	if depth > 8 {
+		return GoalCheckVerdict{}, false, fmt.Errorf("nested Claude JSON output is too deep")
+	}
+	trimmed := trimJSONFence(content)
+	if len(trimmed) == 0 {
+		return GoalCheckVerdict{}, false, nil
+	}
+
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &object); err == nil && object != nil {
+		return decodeGoalVerdictObject(object, depth)
+	}
+
+	var items []json.RawMessage
+	if err := json.Unmarshal(trimmed, &items); err == nil {
+		return decodeGoalVerdictArray(items, depth)
+	}
+
+	var text string
+	if err := json.Unmarshal(trimmed, &text); err == nil {
+		return decodeGoalVerdictValue([]byte(text), depth+1)
+	}
+
 	var verdict GoalCheckVerdict
 	if err := json.Unmarshal(trimmed, &verdict); err != nil {
+		return GoalCheckVerdict{}, false, err
+	}
+	return verdict, true, nil
+}
+
+func decodeGoalVerdictObject(object map[string]json.RawMessage, depth int) (GoalCheckVerdict, bool, error) {
+	if isGoalVerdictObject(object) {
+		verdict, err := decodeRawGoalVerdict(object)
+		return verdict, true, err
+	}
+
+	if verdict, found, err := decodeStructuredOutputObject(object, depth); found || err != nil {
+		return verdict, found, err
+	}
+
+	for _, key := range []string{"structured_output", "output", "data", "message", "result"} {
+		raw, ok := object[key]
+		if !ok {
+			continue
+		}
+		verdict, found, err := decodeGoalVerdictRaw(raw, depth+1)
+		if found || err != nil {
+			return verdict, found, err
+		}
+	}
+
+	if raw, ok := object["content"]; ok {
+		return decodeGoalVerdictRaw(raw, depth+1)
+	}
+	return GoalCheckVerdict{}, false, nil
+}
+
+func decodeStructuredOutputObject(object map[string]json.RawMessage, depth int) (GoalCheckVerdict, bool, error) {
+	objectType := readJSONString(object["type"])
+	name := readJSONString(object["name"])
+	if objectType == "tool_use" && name == "StructuredOutput" {
+		raw, ok := object["input"]
+		if !ok {
+			return GoalCheckVerdict{}, true, fmt.Errorf("structured output tool call missing input")
+		}
+		return decodeGoalVerdictRaw(raw, depth+1)
+	}
+	if objectType == "structured_output" {
+		for _, key := range []string{"data", "input", "result"} {
+			raw, ok := object[key]
+			if !ok {
+				continue
+			}
+			return decodeGoalVerdictRaw(raw, depth+1)
+		}
+		return GoalCheckVerdict{}, true, fmt.Errorf("structured output payload missing data")
+	}
+	return GoalCheckVerdict{}, false, nil
+}
+
+func decodeGoalVerdictArray(items []json.RawMessage, depth int) (GoalCheckVerdict, bool, error) {
+	var firstErr error
+	for _, item := range items {
+		var object map[string]json.RawMessage
+		if err := json.Unmarshal(item, &object); err != nil || object == nil {
+			continue
+		}
+		if readJSONString(object["type"]) != "tool_use" || readJSONString(object["name"]) != "StructuredOutput" {
+			continue
+		}
+		verdict, found, err := decodeGoalVerdictObject(object, depth+1)
+		if found && err == nil {
+			return verdict, true, nil
+		}
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+
+	for _, item := range items {
+		verdict, found, err := decodeGoalVerdictRaw(item, depth+1)
+		if found && err == nil {
+			return verdict, true, nil
+		}
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if firstErr != nil {
+		return GoalCheckVerdict{}, true, firstErr
+	}
+	return GoalCheckVerdict{}, false, nil
+}
+
+func decodeGoalVerdictRaw(raw json.RawMessage, depth int) (GoalCheckVerdict, bool, error) {
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return decodeGoalVerdictValue([]byte(text), depth+1)
+	}
+	return decodeGoalVerdictValue(raw, depth+1)
+}
+
+func decodeRawGoalVerdict(object map[string]json.RawMessage) (GoalCheckVerdict, error) {
+	for _, field := range []string{"completed", "confidence", "reason", "missing_work", "next_round_guidance"} {
+		if _, ok := object[field]; !ok {
+			return GoalCheckVerdict{}, fmt.Errorf("missing required field %q", field)
+		}
+	}
+	content, err := json.Marshal(object)
+	if err != nil {
+		return GoalCheckVerdict{}, fmt.Errorf("marshal goal verdict: %w", err)
+	}
+	var verdict GoalCheckVerdict
+	if err := json.Unmarshal(content, &verdict); err != nil {
 		return GoalCheckVerdict{}, err
 	}
 	verdict.Reason = strings.TrimSpace(verdict.Reason)
@@ -539,6 +678,34 @@ func decodeGoalVerdict(content []byte) (GoalCheckVerdict, error) {
 		return GoalCheckVerdict{}, fmt.Errorf("missing reason")
 	}
 	return verdict, nil
+}
+
+func isGoalVerdictObject(object map[string]json.RawMessage) bool {
+	for _, field := range []string{"completed", "confidence", "reason", "missing_work", "next_round_guidance"} {
+		if _, ok := object[field]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func readJSONString(raw json.RawMessage) string {
+	var value string
+	if len(raw) == 0 {
+		return ""
+	}
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return ""
+	}
+	return value
+}
+
+func trimJSONFence(content []byte) []byte {
+	trimmed := bytes.TrimSpace(content)
+	trimmed = bytes.TrimPrefix(trimmed, []byte("```json"))
+	trimmed = bytes.TrimPrefix(trimmed, []byte("```"))
+	trimmed = bytes.TrimSuffix(trimmed, []byte("```"))
+	return bytes.TrimSpace(trimmed)
 }
 
 func readGoalCheckOutput(outputPath string, stdout string) ([]byte, error) {

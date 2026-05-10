@@ -69,6 +69,65 @@ func TestInstallCreatesManagedFiles(t *testing.T) {
 	assertContains(t, joined, "Restart Claude Code")
 }
 
+func TestInstallSkipsManagedHooksWhenPluginHooksAreEnabled(t *testing.T) {
+	t.Parallel()
+
+	paths := mustPaths(t)
+	sourceBinary := writeSourceBinary(t)
+	if err := os.MkdirAll(paths.ClaudeConfigDir, 0o755); err != nil {
+		t.Fatalf("create Claude Code config dir: %v", err)
+	}
+	writeJSONDoc(t, paths.HooksPath(), map[string]any{
+		"enabledPlugins": map[string]any{
+			ccLoopPluginID: true,
+		},
+		"hooks": map[string]any{
+			"Stop": []any{
+				map[string]any{
+					"hooks": []any{
+						map[string]any{
+							"type":    "command",
+							"command": "python3 ./custom_stop.py",
+						},
+						map[string]any{
+							"type":    "command",
+							"command": managedHookCommand("stop"),
+						},
+					},
+				},
+			},
+			"UserPromptSubmit": []any{
+				map[string]any{
+					"hooks": []any{
+						map[string]any{
+							"type":    "command",
+							"command": managedHookCommand("user-prompt-submit"),
+						},
+					},
+				},
+			},
+		},
+	})
+
+	messages, err := Install(paths, Options{SourceBinary: sourceBinary})
+	if err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	settingsDoc := readJSONFile(t, paths.SettingsPath())
+	enabledPlugins, ok := settingsDoc["enabledPlugins"].(map[string]any)
+	if !ok || enabledPlugins[ccLoopPluginID] != true {
+		t.Fatalf("expected enabled plugin state preserved, got %#v", settingsDoc["enabledPlugins"])
+	}
+	assertHookCommandPresent(t, settingsDoc, "Stop", "python3 ./custom_stop.py")
+	assertHookCommandCount(t, settingsDoc, "Stop", managedHookCommand("stop"), 0)
+	assertHookCommandCount(t, settingsDoc, "UserPromptSubmit", managedHookCommand("user-prompt-submit"), 0)
+
+	joined := strings.Join(messages, "\n")
+	assertContains(t, joined, "Skipped managed hook config because cc-loop plugin hooks are enabled")
+	assertContains(t, joined, "removed duplicate managed hook registrations")
+}
+
 func TestInstallPreservesExistingRuntimeConfig(t *testing.T) {
 	t.Parallel()
 

@@ -9,10 +9,16 @@ import (
 )
 
 const (
+	ccLoopPluginID           = "cc-loop@cc-loop-plugins"
 	stopStatusMessage        = "Evaluating the Claude Code loop"
 	userPromptStatusMessage  = "Preparing the Claude Code loop"
 	userPromptTimeoutSeconds = 30
 )
+
+type managedHookSyncResult struct {
+	PluginHooksEnabled  bool
+	RemovedManagedHooks bool
+}
 
 func managedHooksTemplate(stopTimeoutSeconds int) map[string]any {
 	if stopTimeoutSeconds <= 0 {
@@ -57,21 +63,36 @@ func managedHookCommand(subcommand string) string {
 	)
 }
 
-func ensureManagedHookConfig(paths loop.Paths) error {
+func ensureManagedHookConfig(paths loop.Paths) (managedHookSyncResult, error) {
 	cfg := loop.LoadRuntimeConfig(paths)
 	template := managedHooksTemplate(cfg.Hooks.StopTimeoutSeconds)
 	existing, err := loadHookConfig(paths.HooksPath())
 	if err != nil {
-		return err
+		return managedHookSyncResult{}, err
+	}
+	if ccLoopPluginHooksEnabled(existing) {
+		cleaned, removed, err := removeManagedHooks(existing, template)
+		if err != nil {
+			return managedHookSyncResult{}, err
+		}
+		if removed {
+			if err := loop.AtomicWriteJSON(paths.HooksPath(), cleaned); err != nil {
+				return managedHookSyncResult{}, fmt.Errorf("write hooks config %q: %w", paths.HooksPath(), err)
+			}
+		}
+		return managedHookSyncResult{
+			PluginHooksEnabled:  true,
+			RemovedManagedHooks: removed,
+		}, nil
 	}
 	merged, err := mergeManagedHooks(existing, template)
 	if err != nil {
-		return err
+		return managedHookSyncResult{}, err
 	}
 	if err := loop.AtomicWriteJSON(paths.HooksPath(), merged); err != nil {
-		return fmt.Errorf("write hooks config %q: %w", paths.HooksPath(), err)
+		return managedHookSyncResult{}, fmt.Errorf("write hooks config %q: %w", paths.HooksPath(), err)
 	}
-	return nil
+	return managedHookSyncResult{}, nil
 }
 
 func removeManagedHookConfig(paths loop.Paths) (bool, error) {
@@ -114,6 +135,19 @@ func loadHookConfig(path string) (map[string]any, error) {
 		payload = map[string]any{}
 	}
 	return payload, nil
+}
+
+func ccLoopPluginHooksEnabled(settingsDoc map[string]any) bool {
+	enabledPluginsAny, ok := settingsDoc["enabledPlugins"]
+	if !ok {
+		return false
+	}
+	enabledPlugins, ok := enabledPluginsAny.(map[string]any)
+	if !ok {
+		return false
+	}
+	enabled, ok := enabledPlugins[ccLoopPluginID].(bool)
+	return ok && enabled
 }
 
 func managedCommands(templateDoc map[string]any) (map[string]struct{}, error) {
