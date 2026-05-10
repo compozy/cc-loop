@@ -27,11 +27,10 @@ func TestPluginManifestAndMarketplaceMetadata(t *testing.T) {
 	if manifest["skills"] != "./skills/" {
 		t.Fatalf("unexpected skills path %#v", manifest["skills"])
 	}
-	if manifest["hooks"] != "./hooks/hooks.json" {
-		t.Fatalf("unexpected hooks path %#v", manifest["hooks"])
+	if _, ok := manifest["hooks"]; ok {
+		t.Fatal("manifest must not reference hooks/hooks.json because Claude Code auto-loads the standard hooks file")
 	}
 	assertRelativePluginPath(t, manifest["skills"].(string))
-	assertRelativePluginPath(t, manifest["hooks"].(string))
 
 	hooks := readJSONFile(t, filepath.Join(root, "plugins", "cc-loop", "hooks", "hooks.json"))
 	hooksRoot, ok := hooks["hooks"].(map[string]any)
@@ -56,6 +55,9 @@ func TestPluginManifestAndMarketplaceMetadata(t *testing.T) {
 	}
 	if entry["name"] != "cc-loop" {
 		t.Fatalf("unexpected marketplace plugin name %#v", entry["name"])
+	}
+	if entry["version"] != version {
+		t.Fatalf("marketplace version %#v must match plugin manifest version %q", entry["version"], version)
 	}
 	source, ok := entry["source"].(string)
 	if !ok {

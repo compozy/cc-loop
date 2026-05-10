@@ -5,7 +5,9 @@ Claude Code plugin bundle for the `cc-loop` CLI.
 ## Contents
 
 - `.claude-plugin/plugin.json`: Claude Code plugin manifest.
-- `hooks/hooks.json`: Claude Code lifecycle hooks for `UserPromptSubmit` and `Stop`.
+- `hooks/hooks.json`: standard Claude Code lifecycle hook file for
+  `UserPromptSubmit` and `Stop`. Claude Code auto-loads this path, so the
+  manifest intentionally does not reference it again.
 - `skills/cc-loop/SKILL.md`: user-facing setup and usage guidance.
 
 The hook commands expect the managed runtime binary at:

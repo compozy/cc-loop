@@ -109,7 +109,7 @@ jobs:
             echo "has_release_pr=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Sync Plugin Manifest Version
+      - name: Sync Plugin Metadata Version
         if: steps.pr_release.outputs.has_release_pr == 'true'
         env:
           RELEASE_BRANCH: ${{ steps.pr_release.outputs.release_branch }}
@@ -127,17 +127,29 @@ jobs:
           import os
           from pathlib import Path
 
-          path = Path("plugins/cc-loop/.claude-plugin/plugin.json")
-          payload = json.loads(path.read_text())
-          payload["version"] = os.environ["RELEASE_BRANCH"].removeprefix("release/v")
-          path.write_text(json.dumps(payload, indent=2) + "\n")
+          version = os.environ["RELEASE_BRANCH"].removeprefix("release/v")
+
+          manifest_path = Path("plugins/cc-loop/.claude-plugin/plugin.json")
+          manifest = json.loads(manifest_path.read_text())
+          manifest["version"] = version
+          manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+
+          marketplace_path = Path(".claude-plugin/marketplace.json")
+          marketplace = json.loads(marketplace_path.read_text())
+          for entry in marketplace.get("plugins", []):
+              if entry.get("name") == "cc-loop":
+                  entry["version"] = version
+                  break
+          else:
+              raise SystemExit("cc-loop marketplace entry not found")
+          marketplace_path.write_text(json.dumps(marketplace, indent=2) + "\n")
           PY
 
-          if ! git diff --quiet -- plugins/cc-loop/.claude-plugin/plugin.json; then
+          if ! git diff --quiet -- plugins/cc-loop/.claude-plugin/plugin.json .claude-plugin/marketplace.json; then
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add plugins/cc-loop/.claude-plugin/plugin.json
-            git commit -m "build: sync plugin manifest version"
+            git add plugins/cc-loop/.claude-plugin/plugin.json .claude-plugin/marketplace.json
+            git commit -m "build: sync plugin metadata version"
             git push origin "$RELEASE_BRANCH"
           fi
 
