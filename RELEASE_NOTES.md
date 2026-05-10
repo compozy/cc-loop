@@ -1,3 +1,9 @@
+## 0.1.2 - 2026-05-10
+
+### Bug Fixes
+
+- Handle Claude structured goal verdicts
+
 ## 0.1.1 - 2026-05-10
 
 ### Bug Fixes
@@ -21,9 +27,3 @@
 ### Features
 
 - Scoped config
-
-## 0.1.2 - 2026-05-02
-
-### Bug Fixes
-
-- Release process
