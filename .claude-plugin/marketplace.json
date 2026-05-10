@@ -9,9 +9,15 @@
       "name": "cc-loop",
       "source": "./plugins/cc-loop",
       "description": "Claude Code lifecycle hooks for minimum-duration, rounds-based, and goal-confirmed agent work.",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "category": "Developer Tools",
-      "tags": ["claude-code", "hooks", "automation", "qa", "cli"]
+      "tags": [
+        "claude-code",
+        "hooks",
+        "automation",
+        "qa",
+        "cli"
+      ]
     }
   ]
 }
