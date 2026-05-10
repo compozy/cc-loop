@@ -1,5 +1,5 @@
-## 0.1.1 - 2026-05-10
+## 0.1.2 - 2026-05-10
 
 ### Bug Fixes
 
-- Avoid duplicate Claude hook load
+- Handle Claude structured goal verdicts
