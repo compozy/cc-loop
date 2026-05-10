@@ -1,5 +1,5 @@
-## 0.1.0 - 2026-05-10
+## 0.1.1 - 2026-05-10
 
-### Features
+### Bug Fixes
 
-- Initial Claude Code loop
+- Avoid duplicate Claude hook load
