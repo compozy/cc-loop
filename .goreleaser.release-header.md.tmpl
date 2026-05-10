@@ -1,0 +1,22 @@
+## cc-loop {{ .Version }}
+
+`cc-loop` is a local-first Claude Code CLI and plugin that keeps explicitly activated Claude Code tasks running until they satisfy either a minimum duration or a target number of deliberate rounds.
+
+### Installation
+
+#### Go Install
+
+```bash
+go install github.com/compozy/cc-loop/cmd/cc-loop@{{ .Tag }}
+cc-loop install
+```
+
+#### Binary Download
+
+Download the appropriate `cc-loop_<os>_<arch>` archive for your platform, extract it, put `cc-loop` on your `PATH`, and run:
+
+```bash
+cc-loop install
+```
+
+The archive includes the CLI binary, README, license, and Claude Code plugin bundle.

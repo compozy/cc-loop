@@ -1,0 +1,138 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+# vim: set ts=2 sw=2 tw=0 fo=jcroql
+version: 2
+
+project_name: cc-loop
+
+env:
+  - GO111MODULE=on
+  - CGO_ENABLED=0
+
+git:
+  tag_sort: -version:refname
+
+builds:
+  - id: cc-loop
+    main: ./cmd/cc-loop
+    binary: cc-loop
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      - -X github.com/compozy/cc-loop/internal/version.Version={{ .Version }}
+      - -X github.com/compozy/cc-loop/internal/version.Commit={{ .ShortCommit }}
+      - -X github.com/compozy/cc-loop/internal/version.Date={{ .Date }}
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: cc-loop-archive
+    ids:
+      - cc-loop
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- with .Arm }}v{{ . }}{{ end }}
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    files:
+      - README.md
+      - LICENSE
+      - plugins/cc-loop/**/*
+      - .claude-plugin/marketplace.json
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+signs:
+  - cmd: cosign
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - "--output-certificate=${certificate}"
+      - "--output-signature=${signature}"
+      - "${artifact}"
+      - "--yes"
+    artifacts: checksum
+    output: true
+
+snapshot:
+  version_template: "0.0.0-{{ .Timestamp }}"
+
+changelog:
+  use: git
+  sort: asc
+  abbrev: 7
+  groups:
+    - title: "Features"
+      regexp: "^.*feat(\\(.+\\))?!?:+.*$"
+      order: 0
+    - title: "Bug Fixes"
+      regexp: "^.*fix(\\(.+\\))?!?:+.*$"
+      order: 1
+    - title: "Performance Improvements"
+      regexp: "^.*perf(\\(.+\\))?!?:+.*$"
+      order: 2
+    - title: "Security"
+      regexp: "^.*security(\\(.+\\))?!?:+.*$"
+      order: 3
+    - title: "Documentation"
+      regexp: "^.*docs(\\(.+\\))?!?:+.*$"
+      order: 4
+    - title: "Refactoring"
+      regexp: "^.*refactor(\\(.+\\))?!?:+.*$"
+      order: 5
+    - title: "Dependencies"
+      regexp: "^.*deps(\\(.+\\))?!?:+.*$"
+      order: 6
+    - title: "Testing"
+      regexp: "^.*test(\\(.+\\))?!?:+.*$"
+      order: 7
+    - title: "Other Changes"
+      order: 999
+  filters:
+    exclude:
+      - "^(build|ci): "
+      - "^ci\\(release\\): "
+      - "^release: "
+      - "^chore\\(release\\): "
+      - "^docs: update$"
+      - "^test:"
+      - "^test\\("
+      - "merge conflict"
+      - Merge branch
+      - Merge pull request
+      - Merge remote-tracking branch
+      - go mod tidy
+      - "^wip "
+      - "^wip:"
+
+release:
+  github:
+    owner: compozy
+    name: cc-loop
+  target_commitish: "{{ .Commit }}"
+  name_template: "Release {{ .Version }}"
+  mode: replace
+  replace_existing_artifacts: true
+  draft: false
+  prerelease: auto
+
+sboms:
+  - artifacts: archive

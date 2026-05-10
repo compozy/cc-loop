@@ -1,0 +1,294 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+    branches:
+      - main
+      - "release/v*"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Workflow mode to run"
+        required: false
+        type: choice
+        default: release-pr
+        options:
+          - release-pr
+          - dry-run
+      force_release:
+        description: "Force a release even if no changes are detected"
+        required: false
+        type: boolean
+        default: false
+      head_ref:
+        description: "Release PR head ref for dispatched dry-run validation"
+        required: false
+        type: string
+      pr_number:
+        description: "Release PR number for dispatched dry-run validation"
+        required: false
+        type: string
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+env:
+  CGO_ENABLED: 0
+  GO_VERSION: "1.26.2"
+  INITIAL_VERSION: "v0.1.0"
+  PR_RELEASE_MODULE: github.com/compozy/releasepr@v0.0.21
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+  id-token: write
+  attestations: write
+
+jobs:
+  release-pr:
+    name: Create/Update Release PR
+    if: |
+      (github.event_name == 'push' &&
+       github.ref == 'refs/heads/main' &&
+       !startsWith(github.event.head_commit.message, 'release:') &&
+       !startsWith(github.event.head_commit.message, 'ci(release):') &&
+       !startsWith(github.event.head_commit.message, 'Merge pull request') &&
+       github.event.head_commit.author.name != 'github-actions[bot]') ||
+      (github.event_name == 'workflow_dispatch' &&
+       (inputs.mode == 'release-pr' || inputs.mode == ''))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Set up Go
+        uses: ./.github/actions/setup-go
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Setup git-cliff
+        uses: ./.github/actions/setup-git-cliff
+
+      - name: Run PR Release Orchestrator
+        id: pr_release
+        env:
+          FORCE_RELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.force_release }}
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          INITIAL_VERSION: ${{ env.INITIAL_VERSION }}
+        run: |
+          set -euo pipefail
+
+          args=(pr-release --enable-rollback --ci-output)
+          if [[ "$FORCE_RELEASE" == "true" ]]; then
+            args+=(--force)
+          fi
+
+          go run "${{ env.PR_RELEASE_MODULE }}" "${args[@]}"
+
+          branch="$(git branch --show-current)"
+          if [[ "$branch" =~ ^release/v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            echo "has_release_pr=true" >> "$GITHUB_OUTPUT"
+            echo "release_branch=$branch" >> "$GITHUB_OUTPUT"
+          else
+            echo "No release PR branch produced; skipping release PR checks."
+            echo "has_release_pr=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Sync Plugin Manifest Version
+        if: steps.pr_release.outputs.has_release_pr == 'true'
+        env:
+          RELEASE_BRANCH: ${{ steps.pr_release.outputs.release_branch }}
+        run: |
+          set -euo pipefail
+
+          version="${RELEASE_BRANCH#release/v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Could not extract plugin version from $RELEASE_BRANCH"
+            exit 1
+          fi
+
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path("plugins/cc-loop/.claude-plugin/plugin.json")
+          payload = json.loads(path.read_text())
+          payload["version"] = os.environ["RELEASE_BRANCH"].removeprefix("release/v")
+          path.write_text(json.dumps(payload, indent=2) + "\n")
+          PY
+
+          if ! git diff --quiet -- plugins/cc-loop/.claude-plugin/plugin.json; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add plugins/cc-loop/.claude-plugin/plugin.json
+            git commit -m "build: sync plugin manifest version"
+            git push origin "$RELEASE_BRANCH"
+          fi
+
+      - name: Dispatch Release PR Checks
+        if: steps.pr_release.outputs.has_release_pr == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_BRANCH: ${{ steps.pr_release.outputs.release_branch }}
+        run: |
+          set -euo pipefail
+
+          branch="$RELEASE_BRANCH"
+          if [[ ! "$branch" =~ ^release/v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            echo "::error::Expected to be on a release branch after orchestration, got '$branch'"
+            exit 1
+          fi
+
+          pr_number="$(gh pr view "$branch" --json number --jq '.number')"
+          if [[ -z "$pr_number" ]]; then
+            echo "::error::Could not resolve pull request for $branch"
+            exit 1
+          fi
+
+          echo "Dispatching CI workflow for $branch"
+          gh workflow run ci.yml --ref "$branch"
+
+          echo "Dispatching release dry-run workflow for $branch (PR #$pr_number)"
+          gh workflow run release.yml \
+            --ref "$branch" \
+            -f mode=dry-run \
+            -f head_ref="$branch" \
+            -f pr_number="$pr_number"
+
+  dry-run:
+    name: Dry-Run Release Check
+    if: |
+      (
+        github.event_name == 'pull_request' &&
+        (
+          startsWith(github.event.pull_request.title, 'release: Release ') ||
+          startsWith(github.event.pull_request.title, 'ci(release): Release ') ||
+          startsWith(github.base_ref, 'release/v')
+        )
+      ) ||
+      (
+        github.event_name == 'workflow_dispatch' &&
+        inputs.mode == 'dry-run'
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.head_ref || github.ref }}
+
+      - name: Set up Go
+        uses: ./.github/actions/setup-go
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Setup release tools
+        uses: ./.github/actions/setup-release
+
+      - name: Run Dry-Run Orchestrator
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          GITHUB_HEAD_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.head_ref || github.head_ref }}
+          GITHUB_ISSUE_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || github.event.pull_request.number }}
+          INITIAL_VERSION: ${{ env.INITIAL_VERSION }}
+        run: go run "${{ env.PR_RELEASE_MODULE }}" dry-run --ci-output
+
+  release:
+    name: Publish Release
+    if: |
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      (
+        startsWith(github.event.head_commit.message, 'release:') ||
+        startsWith(github.event.head_commit.message, 'ci(release):')
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Set up Go
+        uses: ./.github/actions/setup-go
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Setup release tools
+        uses: ./.github/actions/setup-release
+
+      - name: Run verification pipeline
+        run: make verify
+        env:
+          CGO_ENABLED: 1
+
+      - name: Create Git Tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          INITIAL_VERSION: ${{ env.INITIAL_VERSION }}
+        run: |
+          set -euo pipefail
+
+          version="$(git cliff --bumped-version 2>/dev/null | sed 's/^v//')"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Could not get version from git-cliff. Got: $version"
+            version="$(git log -1 --pretty=format:'%s' | sed -E 's/.*Release v([0-9]+\.[0-9]+\.[0-9]+).*/\1/')"
+          fi
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Could not extract release version. Got: $version"
+            exit 1
+          fi
+
+          tag="v$version"
+          if git rev-parse "$tag" >/dev/null 2>&1; then
+            echo "Tag $tag already exists locally."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag -a "$tag" -m "Release $tag"
+          fi
+          git push origin "$tag"
+
+      - name: Validate release notes files
+        run: |
+          set -euo pipefail
+          test -s RELEASE_BODY.md
+          test -s .goreleaser.release-header.md.tmpl
+          test -s .goreleaser.release-footer.md.tmpl
+
+      - name: Publish with GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: latest
+          args: >-
+            release --clean
+            --release-notes=RELEASE_BODY.md
+            --release-header-tmpl=.goreleaser.release-header.md.tmpl
+            --release-footer-tmpl=.goreleaser.release-footer.md.tmpl
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          COSIGN_EXPERIMENTAL: 1

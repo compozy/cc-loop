@@ -1,0 +1,22 @@
+### Verification
+
+Release archives are checksummed. To verify a downloaded artifact:
+
+```bash
+sha256sum -c checksums.txt
+```
+
+The `checksums.txt` file is signed with keyless Sigstore when the GitHub release workflow publishes artifacts:
+
+```bash
+cosign verify-blob \
+  --signature checksums.txt.sig \
+  --certificate checksums.txt.pem \
+  checksums.txt
+```
+
+{{- if .PreviousTag }}
+**Full Changelog**: https://github.com/compozy/cc-loop/compare/{{ .PreviousTag }}...{{ .Tag }}
+{{- else }}
+**Source**: https://github.com/compozy/cc-loop/tree/{{ .Tag }}
+{{- end }}

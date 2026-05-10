@@ -1,0 +1,12 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.env
+.tmp/
+.cache/
+.claude/
+.codex/ledger/
+bin/
+dist/
+coverage.out
+coverage.html

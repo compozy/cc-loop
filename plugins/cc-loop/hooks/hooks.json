@@ -1,0 +1,28 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "command": "bin=\"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/cc-loop/bin/cc-loop\"; if [ -x \"$bin\" ]; then \"$bin\" hook stop; else exit 0; fi",
+            "statusMessage": "Evaluating the Claude Code loop",
+            "timeout": 2700,
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "command": "bin=\"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/cc-loop/bin/cc-loop\"; if [ -x \"$bin\" ]; then \"$bin\" hook user-prompt-submit; else exit 0; fi",
+            "statusMessage": "Preparing the Claude Code loop",
+            "timeout": 30,
+            "type": "command"
+          }
+        ]
+      }
+    ]
+  }
+}

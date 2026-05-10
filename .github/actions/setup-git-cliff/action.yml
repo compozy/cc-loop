@@ -1,0 +1,30 @@
+name: "Setup git-cliff"
+description: "Installs git-cliff for release versioning and changelog generation"
+
+inputs:
+  version:
+    description: "git-cliff version to install"
+    required: false
+    default: "2.7.0"
+
+outputs:
+  version:
+    description: "The git-cliff version that was installed"
+    value: ${{ steps.version.outputs.version }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install git-cliff
+      uses: taiki-e/install-action@v2
+      with:
+        tool: git-cliff@${{ inputs.version }}
+
+    - name: Verify git-cliff
+      id: version
+      shell: bash
+      run: |
+        set -euo pipefail
+        git-cliff --version
+        version="$(git-cliff --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+        echo "version=${version}" >> "$GITHUB_OUTPUT"
