@@ -1,11 +1,5 @@
-## 0.1.3 - 2026-05-05
+## 0.1.0 - 2026-05-10
 
-### Bug Fixes
-
-- Upgrade
-### Documentation
-
-- Fix readme
 ### Features
 
-- Scoped config
+- Initial Claude Code loop
